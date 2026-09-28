@@ -398,9 +398,13 @@
                     <input type="number" id="stagePrice_ثانوي" placeholder="مثال: 500" min="0">
                 </div>
             </div>
-            <button class="btn btn-success" style="width:100%;margin-top:12px;" onclick="applyStagePrices()">✓ تطبيق أسعار المراحل</button>
+            <div style="margin-top:16px;padding-top:14px;border-top:1px dashed var(--glass-border);">
+                <label style="display:block;margin-bottom:10px;color:var(--gold-soft);font-weight:700;">🏫 سعر لكل فصل (إعدادي / ثانوي)</label>
+                <div id="classPricesList"></div>
+            </div>
+            <button class="btn btn-success" style="width:100%;margin-top:12px;" onclick="applyStagePrices()">✓ تطبيق الأسعار على الطلاب</button>
             <p style="font-size:12px;color:rgba(255,255,255,.4);margin-top:8px;">
-                هيتطبق على كل طلاب المرحلة في القائمة تحت — تقدر تعدّل سعر أي طالب لوحده (تخفيض مثلاً) قبل ما تضغط "حفظ الأسعار".
+                سعر الفصل أقوى من سعر المرحلة. لو سبت خانة فصل فاضية هيمشي على سعر المرحلة. هيتطبق على كل طلاب المرحلة/الفصل في القائمة تحت — تقدر تعدّل سعر أي طالب لوحده (تخفيض مثلاً) قبل ما تضغط "حفظ الأسعار".
             </p>
         </div>
         <label style="display:block;margin-bottom:10px;color:var(--gold-soft);font-weight:700;">✏️ تعديل سعر طالب بعينه (تخفيض مثلاً)</label>
@@ -500,9 +504,25 @@
     // يحسب السعر الفعلي: تعديل خاص بالطالب > سعر المرحلة > السعر الافتراضي
     function getEffectivePrice(s) {
         if (metaData.prices && metaData.prices[s.id] != null) return metaData.prices[s.id];
-        const stage = getStudentStage(s.class);
+        return getDefaultPrice(s.class);
+    }
+
+    // السعر الافتراضي لفصل: سعر الفصل > سعر المرحلة > السعر الافتراضي العام
+    function classKey(c) { return (c || '').trim().replace(/\s+/g, ' '); }
+    function getDefaultPrice(classText) {
+        const ck = classKey(classText);
+        if (ck && metaData.classPrices && metaData.classPrices[ck] != null) return metaData.classPrices[ck];
+        const stage = getStudentStage(classText);
         if (stage && metaData.stagePrices && metaData.stagePrices[stage] != null) return metaData.stagePrices[stage];
         return DEFAULT_PRICE;
+    }
+    function escAttr(t) { return String(t).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+    function gradeRank(t) {
+        const n = (t || '').replace(/[أإآ]/g,'ا').replace(/ى/g,'ي');
+        if (/الاول|اولي|(^|\s)1(\s|$)/.test(n)) return 1;
+        if (/الثاني|ثانيه|ثانية/.test(n)) return 2;
+        if (/الثالث|ثالثه|ثالثة/.test(n)) return 3;
+        return 9;
     }
 
     // ── Helpers ──
@@ -563,7 +583,7 @@
 
     // ── Save meta (prices) ──
     async function saveMeta() {
-        try { await setDoc(metaRef, metaData, { merge: true }); } catch(e) { console.error(e); }
+        try { await setDoc(metaRef, metaData, { mergeFields: Object.keys(metaData) }); } catch(e) { console.error(e); }
     }
 
     // ── Build display list ──
@@ -745,19 +765,50 @@
             if (inp) inp.value = (metaData.stagePrices && metaData.stagePrices[stage]) || '';
         });
 
+        renderClassPriceInputs();
+
         let html = '<div style="max-height:320px;overflow-y:auto;">';
         students.forEach(s => {
             const stage = getStudentStage(s.class);
             const hasOverride = metaData.prices && metaData.prices[s.id] != null;
             html += `<div class="form-group price-row" data-search="${(s.name + ' ' + s.class).toLowerCase()}">
                 <label>${s.name} (${s.class}${stage ? '' : ' — مرحلة غير محددة'})${hasOverride ? ' 🏷️ سعر خاص' : ''}</label>
-                <input type="number" id="price_${s.id}" value="${s.subscriptionPrice}" min="0">
+                <input type="number" id="price_${s.id}" value="${s.subscriptionPrice}" data-init="${s.subscriptionPrice}" min="0">
             </div>`;
         });
         html += '</div>';
         document.getElementById('pricesList').innerHTML = html;
         document.getElementById('pricesSearchInput').value = '';
         document.getElementById('setPricesModal').classList.add('active');
+    }
+
+    // يعرض خانة سعر لكل فصل موجود فعلاً عند الطلاب (إعدادي / ثانوي)
+    function renderClassPriceInputs() {
+        const box = document.getElementById('classPricesList');
+        const groups = { 'اعدادي': {}, 'ثانوي': {} };
+        students.forEach(s => {
+            const stage = getStudentStage(s.class);
+            if (!groups[stage]) return;
+            const ck = classKey(s.class);
+            groups[stage][ck] = (groups[stage][ck] || 0) + 1;
+        });
+        const titles = { 'اعدادي': 'الإعدادي', 'ثانوي': 'الثانوي' };
+        let html = '';
+        Object.keys(groups).forEach(stage => {
+            const classes = Object.keys(groups[stage]).sort((a, b) => gradeRank(a) - gradeRank(b) || a.localeCompare(b, 'ar'));
+            if (!classes.length) return;
+            html += `<div style="font-size:13px;color:var(--gold-hi);margin:10px 0 6px;">${titles[stage]}</div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">`;
+            classes.forEach(ck => {
+                const val = (metaData.classPrices && metaData.classPrices[ck]) || '';
+                html += `<div class="form-group" style="margin:0;">
+                    <label>${ck} <span style="opacity:.5;font-size:11px;">(${groups[stage][ck]} طالب)</span></label>
+                    <input type="number" class="class-price-input" data-class="${escAttr(ck)}" value="${val}" placeholder="سعر المرحلة" min="0">
+                </div>`;
+            });
+            html += '</div>';
+        });
+        box.innerHTML = html || '<p style="font-size:12px;color:rgba(255,255,255,.4);">مفيش فصول إعدادي أو ثانوي في بيانات الطلاب.</p>';
     }
 
     function filterPricesList() {
@@ -767,31 +818,46 @@
         });
     }
 
-    // تطبيق سعر كل مرحلة على طلابها في القائمة (تقدر تعدل أي طالب لوحده بعدها قبل الحفظ)
+    // تطبيق الأسعار على الطلاب في القائمة: سعر الفصل أولاً، وإلا سعر المرحلة
+    // (تقدر تعدل أي طالب لوحده بعدها قبل الحفظ)
     function applyStagePrices() {
         const stagePrices = {};
         STAGES.forEach(stage => {
             const v = document.getElementById(`stagePrice_${stage}`).value;
             if (v && v > 0) stagePrices[stage] = parseInt(v);
         });
-        if (Object.keys(stagePrices).length === 0) { showAlert('يرجى إدخال سعر مرحلة واحدة على الأقل!', 'danger'); return; }
+        const classPrices = {};
+        document.querySelectorAll('.class-price-input').forEach(inp => {
+            if (inp.value && inp.value > 0) classPrices[inp.dataset.class] = parseInt(inp.value);
+        });
+        if (Object.keys(stagePrices).length === 0 && Object.keys(classPrices).length === 0) {
+            showAlert('يرجى إدخال سعر مرحلة أو فصل واحد على الأقل!', 'danger'); return;
+        }
 
         let applied = 0;
         students.forEach(s => {
             const stage = getStudentStage(s.class);
-            if (stage && stagePrices[stage] != null) {
+            const ck = classKey(s.class);
+            const price = classPrices[ck] != null ? classPrices[ck] : (stage ? stagePrices[stage] : null);
+            if (price != null) {
                 const inp = document.getElementById(`price_${s.id}`);
-                if (inp) { inp.value = stagePrices[stage]; applied++; }
+                if (inp) { inp.value = price; inp.dataset.touched = '1'; applied++; }
             }
         });
         if (applied === 0) {
-            showAlert('محدش من الطلاب اتحدد له مرحلة — تأكد إن اسم الفصل فيه كلمة ابتدائي/اعدادي/ثانوي', 'danger');
+            showAlert('محدش من الطلاب اتحدد له مرحلة أو فصل مطابق — تأكد من اسم الفصل', 'danger');
             return;
         }
-        showAlert(`تم تطبيق أسعار المراحل على ${applied} طالب — اضغط "حفظ الأسعار" لتأكيدها (تقدر تعدل أي طالب لوحده الأول)`);
+        showAlert(`تم تطبيق الأسعار على ${applied} طالب — اضغط "حفظ الأسعار" لتأكيدها (تقدر تعدل أي طالب لوحده الأول)`);
     }
 
     function savePrices() {
+        // تحقق من الأسعار قبل أي تعديل
+        for (const st of students) {
+            const p = parseInt(document.getElementById(`price_${st.id}`)?.value);
+            if (!p || p < 0) { showAlert('يرجى إدخال أسعار صحيحة!', 'danger'); return; }
+        }
+
         // احفظ أسعار المراحل
         metaData.stagePrices = metaData.stagePrices || {};
         STAGES.forEach(stage => {
@@ -799,22 +865,27 @@
             if (v && v > 0) metaData.stagePrices[stage] = parseInt(v);
         });
 
+        // احفظ أسعار الفصول (الخانة الفاضية = يرجع لسعر المرحلة)
+        metaData.classPrices = metaData.classPrices || {};
+        document.querySelectorAll('.class-price-input').forEach(inp => {
+            const ck = inp.dataset.class;
+            if (inp.value && inp.value > 0) metaData.classPrices[ck] = parseInt(inp.value);
+            else delete metaData.classPrices[ck];
+        });
+
         if (!metaData.prices) metaData.prices = {};
-        let hasError = false;
         students.forEach(s => {
-            const price = parseInt(document.getElementById(`price_${s.id}`)?.value);
-            if (!price || price < 0) { hasError = true; return; }
-            const stage = getStudentStage(s.class);
-            const stageDefault = stage && metaData.stagePrices[stage] != null ? metaData.stagePrices[stage] : DEFAULT_PRICE;
-            if (price === stageDefault) {
-                // السعر مطابق لسعر المرحلة الافتراضي → مفيش داعي لسعر خاص، هيتبع سعر المرحلة تلقائيًا
-                delete metaData.prices[s.id];
+            const inp = document.getElementById(`price_${s.id}`);
+            const price = parseInt(inp.value);
+            // الطالب اللي متلمسش سعره بيفضل تابع لسعر فصله/مرحلته تلقائيًا (أو سعره الخاص لو عنده)
+            const changed = inp.dataset.touched === '1' || price !== parseInt(inp.dataset.init);
+            if (!changed) return;
+            if (price === getDefaultPrice(s.class)) {
+                delete metaData.prices[s.id];   // مطابق لسعر الفصل/المرحلة → مفيش داعي لسعر خاص
             } else {
-                // سعر مختلف → اعتبره سعر خاص (تخفيض غالبًا)
-                metaData.prices[s.id] = price;
+                metaData.prices[s.id] = price;  // سعر مختلف → سعر خاص (تخفيض غالبًا)
             }
         });
-        if (hasError) { showAlert('يرجى إدخال أسعار صحيحة!', 'danger'); return; }
         saveMeta();
         showAlert('✅ تم حفظ الأسعار بنجاح');
         closeModal('setPricesModal');
